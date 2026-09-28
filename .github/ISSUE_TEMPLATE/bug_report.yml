@@ -1,0 +1,46 @@
+name: Bug report
+description: Something went wrong with KeepAwake
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: What you expected and what actually happened.
+      placeholder: I enabled Keep Awake with "Turn Off After 1 Hour", but my Mac slept after 20 minutes.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How to reproduce
+      placeholder: |
+        1. Launch KeepAwake.
+        2. Turn on "Keep Teams Active".
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: KeepAwake version and install method
+      placeholder: 0.1.0 via Homebrew / DMG / built from source
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: macOS version and chip
+      placeholder: macOS 15.3 / Apple silicon
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output of `pmset -g assertions`
+      description: Run it while KeepAwake is on; look for "KeepAwake: user requested".
+      render: text

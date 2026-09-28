@@ -1,0 +1,15 @@
+# Build output (produced by build.sh)
+KeepAwake.app/
+*.dmg
+*.zip
+
+# macOS signing and credentials
+*.p12
+*.p8
+*.mobileprovision
+
+# OS / editor files
+.DS_Store
+.idea/
+.vscode/
+*.swp

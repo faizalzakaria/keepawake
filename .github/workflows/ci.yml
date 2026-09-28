@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+    # release-please opens its release PR with GITHUB_TOKEN, which cannot trigger
+    # workflows; its PR only touches these files, so skip creating a stuck run.
+    paths-ignore:
+      - .release-please-manifest.json
+      - CHANGELOG.md
+      - version.txt
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: build
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build universal app (ad-hoc signed)
+        run: ./build.sh
+
+      - name: Verify bundle
+        run: |
+          set -euo pipefail
+          codesign --verify --strict --verbose=2 KeepAwake.app
+          lipo KeepAwake.app/Contents/MacOS/KeepAwake -verify_arch arm64 x86_64
+          test "$(plutil -extract CFBundleShortVersionString raw -o - KeepAwake.app/Contents/Info.plist)" = "$(cat version.txt)"

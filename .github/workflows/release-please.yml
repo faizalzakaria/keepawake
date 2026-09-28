@@ -1,0 +1,214 @@
+name: release-please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release-created: ${{ steps.release.outputs.release_created }}
+      tag-name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  macos:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release-created == 'true' }}
+    runs-on: macos-latest
+    timeout-minutes: 45
+    concurrency:
+      group: ${{ github.workflow }}-macos-${{ needs.release-please.outputs.tag-name }}
+      cancel-in-progress: false
+    env:
+      TEAM_ID: 8M427X769R
+      SIGN_IDENTITY: "Developer ID Application: FAIZAL FIKHRI ZAKARIA (8M427X769R)"
+      BUNDLE_ID: com.faizalzakaria.keepawake
+      TAG_NAME: ${{ needs.release-please.outputs.tag-name }}
+      VERSION: ${{ needs.release-please.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Build the immutable release tag, not whatever main is by now.
+          ref: refs/tags/${{ env.TAG_NAME }}
+
+      - name: Verify release is still draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RELEASE_DRAFT="$(gh release view "$TAG_NAME" --json isDraft --jq .isDraft)"
+          if [ "$RELEASE_DRAFT" != "true" ]; then
+            echo "Refusing to build artifacts for $TAG_NAME: release is not a draft (isDraft=$RELEASE_DRAFT)." >&2
+            exit 1
+          fi
+          if [ "$(cat version.txt)" != "$VERSION" ]; then
+            echo "version.txt at $TAG_NAME does not match release version $VERSION." >&2
+            exit 1
+          fi
+
+      - name: Restore App Store Connect API key
+        id: asc-key
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+        run: |
+          set -euo pipefail
+          : "${APP_STORE_CONNECT_KEY_ID:?Missing APP_STORE_CONNECT_KEY_ID}"
+          : "${APP_STORE_CONNECT_API_KEY:?Missing APP_STORE_CONNECT_API_KEY}"
+          KEY_PATH="$RUNNER_TEMP/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+          printf '%s' "$APP_STORE_CONNECT_API_KEY" | base64 --decode > "$KEY_PATH"
+          test -s "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          echo "key_path=$KEY_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Import Developer ID Application certificate
+        env:
+          MAC_DEVELOPER_ID_CERT_P12: ${{ secrets.MAC_DEVELOPER_ID_CERT_P12 }}
+          MAC_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.MAC_DEVELOPER_ID_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${MAC_DEVELOPER_ID_CERT_P12:?Missing MAC_DEVELOPER_ID_CERT_P12}"
+          : "${MAC_DEVELOPER_ID_CERT_PASSWORD:?Missing MAC_DEVELOPER_ID_CERT_PASSWORD}"
+          CERT_PATH="$RUNNER_TEMP/DeveloperID_Application.p12"
+          printf '%s' "$MAC_DEVELOPER_ID_CERT_P12" | base64 --decode > "$CERT_PATH"
+          test -s "$CERT_PATH"
+
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERT_PATH" -k "$KEYCHAIN" -f pkcs12 \
+            -P "$MAC_DEVELOPER_ID_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain
+          rm -f "$CERT_PATH"
+
+          if ! security find-identity -v -p codesigning "$KEYCHAIN" | grep -Fq "$SIGN_IDENTITY"; then
+            echo "Imported certificate is not \"$SIGN_IDENTITY\"." >&2
+            exit 1
+          fi
+
+      - name: Build and sign universal app
+        run: ./build.sh
+
+      - name: Notarize and staple app
+        env:
+          APPLE_API_KEY: ${{ steps.asc-key.outputs.key_path }}
+          APPLE_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          : "${APPLE_API_ISSUER:?Missing APP_STORE_CONNECT_ISSUER_ID}"
+          ditto -c -k --keepParent KeepAwake.app "$RUNNER_TEMP/KeepAwake-notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/KeepAwake-notarize.zip" \
+            --key "$APPLE_API_KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple KeepAwake.app
+
+      - name: Create, notarize, and staple DMG
+        env:
+          APPLE_API_KEY: ${{ steps.asc-key.outputs.key_path }}
+          APPLE_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          DMG_PATH="$RUNNER_TEMP/KeepAwake-${VERSION}.dmg"
+          STAGING="$RUNNER_TEMP/dmg"
+          mkdir -p "$STAGING"
+          ditto KeepAwake.app "$STAGING/KeepAwake.app"
+          ln -s /Applications "$STAGING/Applications"
+          hdiutil create -volname KeepAwake -srcfolder "$STAGING" -ov -format UDZO "$DMG_PATH"
+          codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
+          xcrun notarytool submit "$DMG_PATH" \
+            --key "$APPLE_API_KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$DMG_PATH"
+          echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_ENV"
+
+      - name: Verify signed, notarized DMG
+        run: |
+          set -euo pipefail
+          MOUNT_POINT="$RUNNER_TEMP/verify"
+          mkdir -p "$MOUNT_POINT"
+          hdiutil attach "$DMG_PATH" -readonly -nobrowse -mountpoint "$MOUNT_POINT" >/dev/null
+          trap 'hdiutil detach "$MOUNT_POINT" -quiet || hdiutil detach "$MOUNT_POINT" -force -quiet' EXIT
+          APP_PATH="$MOUNT_POINT/KeepAwake.app"
+
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          SIGNATURE="$(codesign -d --verbose=4 "$APP_PATH" 2>&1)"
+          grep -Fq "Identifier=$BUNDLE_ID" <<<"$SIGNATURE"
+          grep -Fq "TeamIdentifier=$TEAM_ID" <<<"$SIGNATURE"
+          grep -Fq "Authority=$SIGN_IDENTITY" <<<"$SIGNATURE"
+          grep -Eq '^CodeDirectory .*flags=.*runtime' <<<"$SIGNATURE"
+          grep -Eq '^Timestamp=.+$' <<<"$SIGNATURE"
+
+          test "$(plutil -extract CFBundleShortVersionString raw -o - "$APP_PATH/Contents/Info.plist")" = "$VERSION"
+          lipo "$APP_PATH/Contents/MacOS/KeepAwake" -verify_arch arm64 x86_64
+
+          GATEKEEPER="$(spctl --assess --type execute --verbose=4 "$APP_PATH" 2>&1)"
+          printf '%s\n' "$GATEKEEPER"
+          grep -Fq 'source=Notarized Developer ID' <<<"$GATEKEEPER"
+          xcrun stapler validate "$APP_PATH"
+          xcrun stapler validate "$DMG_PATH"
+
+          SHA256="$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')"
+          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]]
+          echo "SHA256=$SHA256" >> "$GITHUB_ENV"
+
+      - name: Upload DMG and publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG_NAME" "$DMG_PATH" --clobber
+          gh release edit "$TAG_NAME" --draft=false --latest
+
+      - name: Update Homebrew Cask
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          : "${HOMEBREW_TAP_TOKEN:?Missing HOMEBREW_TAP_TOKEN}"
+          TAP="$RUNNER_TEMP/homebrew-tap"
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/faizalzakaria/homebrew-tap.git" "$TAP"
+          mkdir -p "$TAP/Casks"
+          cat > "$TAP/Casks/keepawake.rb" <<CASK_EOF
+          cask "keepawake" do
+            version "${VERSION}"
+            sha256 "${SHA256}"
+
+            url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}/KeepAwake-${VERSION}.dmg"
+            name "KeepAwake"
+            desc "Menu bar app that keeps your Mac awake"
+            homepage "https://github.com/${GITHUB_REPOSITORY}"
+
+            depends_on macos: ">= :monterey"
+
+            app "KeepAwake.app"
+
+            uninstall quit: "${BUNDLE_ID}"
+
+            zap trash: "~/Library/Preferences/${BUNDLE_ID}.plist"
+          end
+          CASK_EOF
+          cd "$TAP"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/keepawake.rb
+          if ! git diff --cached --quiet; then
+            git commit -m "keepawake ${VERSION}"
+            git push
+          fi
