@@ -58,7 +58,12 @@ open KeepAwake.app
 ```
 
 `build.sh` produces a universal, ad-hoc signed `KeepAwake.app`.
-Because ad-hoc signatures change on every build, macOS may ask you to re-grant Accessibility after rebuilding.
+Ad-hoc signatures change on every build, so macOS drops the Accessibility grant after each rebuild.
+To keep it, sign with any Apple Development certificate you have (`security find-identity -v -p codesigning`):
+
+```sh
+SIGN_IDENTITY="Apple Development: you@example.com (TEAMID)" ./build.sh
+```
 
 ## Contributing
 

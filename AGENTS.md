@@ -4,7 +4,7 @@ Guidance for agents developing KeepAwake.
 
 ## Commands
 
-- `./build.sh` - builds a universal (arm64 + x86_64) `KeepAwake.app`, stamps the version from `version.txt` into `Info.plist`, and ad-hoc signs it. `SIGN_IDENTITY="Developer ID Application: ..."` signs with hardened runtime + timestamp instead (release CI only).
+- `./build.sh` - builds a universal (arm64 + x86_64) `KeepAwake.app`, generates `AppIcon.icns` from `scripts/make-icon.swift`, stamps the version from `version.txt` into `Info.plist`, and ad-hoc signs it. Any other `SIGN_IDENTITY` signs with hardened runtime + timestamp: release CI uses Developer ID; an Apple Development identity locally keeps the Accessibility grant across rebuilds.
 - `open KeepAwake.app` - run it; the app is menu-bar only (`LSUIElement`), no Dock icon.
 - `pmset -g assertions | grep KeepAwake` - confirms the power assertion is held.
 
@@ -16,7 +16,8 @@ Guidance for agents developing KeepAwake.
 
 ## Conventions
 
-- Keep the app a single dependency-free Swift file built by `swiftc`; do not introduce an Xcode project or SwiftPM without a reason.
+- Keep the app a single dependency-free Swift file (`main.swift`) built by `swiftc`; do not introduce an Xcode project or SwiftPM without a reason.
+- The app icon is drawn in Core Graphics by `scripts/make-icon.swift` at build time; do not commit generated `.icns`/PNGs, and do not use SF Symbols in the icon (their license forbids app-icon use).
 - Conventional commits; never hand-edit `CHANGELOG.md`, `version.txt`, or `.release-please-manifest.json`.
 - Release flow and required secrets are documented in `CONTRIBUTING.md#releases`; do not publish artifacts or edit the tap by hand.
 - Never install a locally built bundle into `/Applications`; it would shadow the released app for LaunchServices.

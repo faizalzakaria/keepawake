@@ -11,11 +11,15 @@ OBJ=$(mktemp -d)
 trap 'rm -rf "$OBJ"' EXIT
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 for arch in arm64 x86_64; do
   swiftc -O -target "$arch-apple-macos12" main.swift -o "$OBJ/$arch"
 done
 lipo -create "$OBJ/arm64" "$OBJ/x86_64" -output "$APP/Contents/MacOS/KeepAwake"
+
+swiftc -O scripts/make-icon.swift -o "$OBJ/make-icon"
+"$OBJ/make-icon" "$OBJ/AppIcon.iconset"
+iconutil -c icns "$OBJ/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
 
 cp Info.plist "$APP/Contents/Info.plist"
 plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP/Contents/Info.plist"

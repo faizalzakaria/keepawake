@@ -11,7 +11,7 @@ Thanks for wanting to contribute.
 
 ## Repo Conventions
 
-- Keep it dependency-free: one Swift file, built with `swiftc` via `build.sh`, no Xcode project.
+- Keep it dependency-free: the app is one Swift file (`main.swift`), built with `swiftc` via `build.sh`, no Xcode project. The app icon is generated at build time by `scripts/make-icon.swift`.
 - The minimum supported macOS is 12 (`LSMinimumSystemVersion` in `Info.plist` and `-target` in `build.sh`); keep them in sync.
 - Use [conventional commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `chore:`). release-please uses them to pick the version bump and write release notes. Mark breaking changes with `!` or a `BREAKING CHANGE:` footer.
 - Do not hand-edit release-please metadata: `CHANGELOG.md`, `version.txt`, `.release-please-manifest.json`.
